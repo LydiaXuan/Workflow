@@ -606,17 +606,24 @@ function areNearlyIdenticalGoogleScreenshots(first, second) {
   if (first.orientation !== second.orientation) return false;
   const firstRatio = first.width / first.height;
   const secondRatio = second.width / second.height;
-  if (Math.abs(firstRatio - secondRatio) > .01) return false;
+  if (Math.abs(firstRatio - secondRatio) > .03) return false;
   let totalDifference = 0;
-  let maxDifference = 0;
+  let stronglyDifferentPixels = 0;
   for (let index = 0; index < first.rgb.length; index += 1) {
     const difference = Math.abs(first.rgb[index] - second.rgb[index]);
     totalDifference += difference;
-    if (difference > maxDifference) maxDifference = difference;
+    if (difference > 60) stronglyDifferentPixels += 1;
   }
-  // This deliberately catches only re-encoded copies of the same frame.
-  // Similar game levels must remain separate store screenshots.
-  return totalDifference / first.rgb.length <= 1.2 && maxDifference <= 32;
+  const averageDifference = totalDifference / first.rgb.length;
+  const stronglyDifferentRatio = stronglyDifferentPixels / first.rgb.length;
+  // A carousel clone is the SAME screenshot, just re-encoded from a different
+  // storage id: its average difference is nearly zero and only a few edge
+  // pixels shift under JPEG recompression. Judge identity by that average
+  // instead of a single-pixel maximum, which a lone recompressed edge could
+  // trip and so let the clone survive (the reported "1st = 8th" duplicate).
+  // Distinct game levels differ across most of the frame, so their average
+  // and their share of strongly different pixels both stay far higher.
+  return averageDifference <= 4 && stronglyDifferentRatio <= .02;
 }
 
 function isGooglePlayStoreScreenshot(item) {
