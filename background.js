@@ -505,9 +505,12 @@ async function dedupeStoreCaptureItems(rawItems) {
         );
         if (duplicate) continue;
         fingerprints.push({ kind: "google", fingerprint, itemIndex: unique.length });
-      } catch (_) {
+      } catch (error) {
         // Google may temporarily reject a source image. URL de-duplication
         // above remains available, and the image is kept rather than lost.
+        // Surfacing the failure makes the "clone survived" case diagnosable
+        // instead of silently keeping the duplicate.
+        console.warn(`[Shelly] Play screenshot fingerprint failed, kept without visual de-dup: ${item?.image} — ${error?.message || error}`);
       }
     } else {
       try {
@@ -593,7 +596,8 @@ async function googleStoreImageFingerprint(url) {
       width: bitmap.width,
       height: bitmap.height,
       orientation: bitmap.width >= bitmap.height ? "landscape" : "portrait",
-      rgb
+      rgb,
+      dhash: dhashFromBitmap(bitmap)
     };
     storeFingerprintCache.set(cacheKey, fingerprint);
     return fingerprint;
@@ -602,28 +606,48 @@ async function googleStoreImageFingerprint(url) {
   }
 }
 
+// A difference hash: compare each pixel with its right neighbour on a small
+// grayscale grid. It is robust to re-encoding and resizing (the exact signal
+// that broke raw-pixel comparison of carousel clones) yet still discriminates
+// distinct game levels, whose gradients differ across the frame.
+function dhashFromBitmap(bitmap) {
+  const width = 17;
+  const height = 16;
+  const canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(bitmap, 0, 0, width, height);
+  const data = context.getImageData(0, 0, width, height).data;
+  let bits = "";
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width - 1; x += 1) {
+      const left = (y * width + x) * 4;
+      const right = (y * width + x + 1) * 4;
+      const leftGray = data[left] * .299 + data[left + 1] * .587 + data[left + 2] * .114;
+      const rightGray = data[right] * .299 + data[right + 1] * .587 + data[right + 2] * .114;
+      bits += leftGray > rightGray ? "1" : "0";
+    }
+  }
+  return bits;
+}
+
 function areNearlyIdenticalGoogleScreenshots(first, second) {
   if (first.orientation !== second.orientation) return false;
   const firstRatio = first.width / first.height;
   const secondRatio = second.width / second.height;
-  if (Math.abs(firstRatio - secondRatio) > .03) return false;
+  if (Math.abs(firstRatio - secondRatio) > .05) return false;
   let totalDifference = 0;
-  let stronglyDifferentPixels = 0;
   for (let index = 0; index < first.rgb.length; index += 1) {
-    const difference = Math.abs(first.rgb[index] - second.rgb[index]);
-    totalDifference += difference;
-    if (difference > 60) stronglyDifferentPixels += 1;
+    totalDifference += Math.abs(first.rgb[index] - second.rgb[index]);
   }
   const averageDifference = totalDifference / first.rgb.length;
-  const stronglyDifferentRatio = stronglyDifferentPixels / first.rgb.length;
-  // A carousel clone is the SAME screenshot, just re-encoded from a different
-  // storage id: its average difference is nearly zero and only a few edge
-  // pixels shift under JPEG recompression. Judge identity by that average
-  // instead of a single-pixel maximum, which a lone recompressed edge could
-  // trip and so let the clone survive (the reported "1st = 8th" duplicate).
-  // Distinct game levels differ across most of the frame, so their average
-  // and their share of strongly different pixels both stay far higher.
-  return averageDifference <= 4 && stronglyDifferentRatio <= .02;
+  const dhashDistance = (first.dhash && second.dhash) ? hammingDistance(first.dhash, second.dhash) : Infinity;
+  // A carousel clone is the SAME screenshot re-encoded from a different storage
+  // id. Two independent signals now flag it: a near-zero average pixel diff, OR
+  // a tiny perceptual-hash distance. Either one on its own only fires for the
+  // same frame; distinct levels differ strongly on both, so they stay separate.
+  const identical = dhashDistance <= 12 || averageDifference <= 4;
+  console.info(`[Shelly] Play screenshot compare dHash=${dhashDistance} avgDiff=${averageDifference.toFixed(2)} -> ${identical ? "DUPLICATE (drop)" : "keep"}`);
+  return identical;
 }
 
 function isGooglePlayStoreScreenshot(item) {
