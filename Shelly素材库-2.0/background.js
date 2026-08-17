@@ -226,6 +226,12 @@ function storeSourceKey(url) {
     const parsed = new URL(source);
     parsed.hash = "";
     parsed.hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    // Google can add locale and tracking parameters to the detail-page URL.
+    // The application package is the stable identity for a Play Store listing.
+    if (parsed.hostname === "play.google.com" && parsed.pathname === "/store/apps/details") {
+      const appId = parsed.searchParams.get("id");
+      if (appId) return `play:${appId}`;
+    }
     ["hl", "gl", "referrer", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"].forEach(key => parsed.searchParams.delete(key));
     return parsed.href;
   } catch {
@@ -490,40 +496,50 @@ async function dedupeStoreCaptureItems(rawItems) {
   const fingerprints = [];
   const unique = [];
   for (const item of candidates) {
-    try {
-      const fingerprint = await storeImageFingerprint(item.image);
-      const duplicate = fingerprints.find(existing =>
-        existing.fingerprint.orientation === fingerprint.orientation
-        && hammingDistance(existing.fingerprint.bits, fingerprint.bits) <= 5
-      );
-      if (duplicate) {
-        if (storeCaptureImageScore(item.image) > storeCaptureImageScore(unique[duplicate.itemIndex].image)) {
-          unique[duplicate.itemIndex] = item;
-          duplicate.fingerprint = fingerprint;
-        }
-        continue;
+    if (isGooglePlayStoreScreenshot(item)) {
+      try {
+        const fingerprint = await googleStoreImageFingerprint(item.image);
+        const duplicate = fingerprints.find(existing =>
+          existing.kind === "google"
+          && areNearlyIdenticalGoogleScreenshots(existing.fingerprint, fingerprint)
+        );
+        if (duplicate) continue;
+        fingerprints.push({ kind: "google", fingerprint, itemIndex: unique.length });
+      } catch (_) {
+        // Google may temporarily reject a source image. URL de-duplication
+        // above remains available, and the image is kept rather than lost.
       }
-      fingerprints.push({ fingerprint, itemIndex: unique.length });
-    } catch (_) {
-      // If a host blocks pixel reads, the normalized URL fallback still keeps
-      // responsive variants of the same image out of the capture.
+    } else {
+      try {
+        const fingerprint = await storeImageFingerprint(item.image);
+        const duplicate = fingerprints.find(existing =>
+          existing.kind === "generic"
+          && existing.fingerprint.orientation === fingerprint.orientation
+          && hammingDistance(existing.fingerprint.bits, fingerprint.bits) <= 5
+        );
+        if (duplicate) {
+          if (storeCaptureImageScore(item.image) > storeCaptureImageScore(unique[duplicate.itemIndex].image)) {
+            unique[duplicate.itemIndex] = item;
+            duplicate.fingerprint = fingerprint;
+          }
+          continue;
+        }
+        fingerprints.push({ kind: "generic", fingerprint, itemIndex: unique.length });
+      } catch (_) {
+        // If a host blocks pixel reads, the normalized URL fallback still keeps
+        // responsive variants of the same image out of the capture.
+      }
     }
     unique.push(item);
   }
-  // Apply the lower Play cap only after URL and pixel de-duplication so a
-  // carousel clone cannot displace a later genuine screenshot.
+  // Do not crop Google candidates before the strict pixel pass above. Play
+  // often places different storage IDs for the same frame before later,
+  // genuinely unique screenshots in its carousel. Apply its lower cap only
+  // after the comparison, while App Store collections may retain ten images.
   const limit = rawItems.some(item => hostname(item?.sourceUrl || item?.productUrl || "") === "play.google.com")
     ? MAX_GOOGLE_PLAY_STORE_IMAGES
     : MAX_IOS_STORE_IMAGES;
   return unique.slice(0, limit);
-}
-
-function storeCaptureImageScore(url) {
-  const match = String(url || "").match(/(?:w|width=)(\d{2,5})[^\d]+(?:h|height=)(\d{2,5})|\b(\d{2,5})x(\d{2,5})\b/i);
-  if (!match) return String(url || "").length;
-  const width = Number(match[1] || match[3] || 0);
-  const height = Number(match[2] || match[4] || 0);
-  return width * height || String(url || "").length;
 }
 
 // Fingerprints are cached by image identity so repeated captures and the
@@ -534,8 +550,8 @@ const storeFingerprintCache = new Map();
 // Fingerprinting only needs a downscaled copy. Ask Google's image CDN for a
 // small, fixed-width render instead of the multi-megabyte =s0 original: the
 // fetch is far faster and far less likely to fail. A failed pixel read is
-// exactly what previously let carousel clones (same picture, different URL)
-// slip through as duplicate store screenshots.
+// exactly what previously let carousel clones (same picture, different Base ID
+// and screenshot index) slip through as duplicate store screenshots.
 function googleFingerprintUrl(url) {
   const baseId = googleImageBaseId(url);
   return baseId ? `${baseId}=w320` : String(url || "");
@@ -555,11 +571,72 @@ async function fetchImageBitmap(url) {
   throw lastError || new Error("image unavailable");
 }
 
-async function storeImageFingerprint(url) {
-  const cacheKey = storeImageKey(url) || String(url || "");
+async function googleStoreImageFingerprint(url) {
+  const cacheKey = `google:${googleImageBaseId(url) || url}`;
   const cached = storeFingerprintCache.get(cacheKey);
   if (cached) return cached;
   const bitmap = await fetchImageBitmap(googleFingerprintUrl(url));
+  try {
+    const size = 32;
+    const canvas = new OffscreenCanvas(size, size);
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0, size, size);
+    const pixels = context.getImageData(0, 0, size, size).data;
+    const rgb = new Uint8Array(size * size * 3);
+    let offset = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      rgb[offset++] = pixels[index];
+      rgb[offset++] = pixels[index + 1];
+      rgb[offset++] = pixels[index + 2];
+    }
+    const fingerprint = {
+      width: bitmap.width,
+      height: bitmap.height,
+      orientation: bitmap.width >= bitmap.height ? "landscape" : "portrait",
+      rgb
+    };
+    storeFingerprintCache.set(cacheKey, fingerprint);
+    return fingerprint;
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+function areNearlyIdenticalGoogleScreenshots(first, second) {
+  if (first.orientation !== second.orientation) return false;
+  const firstRatio = first.width / first.height;
+  const secondRatio = second.width / second.height;
+  if (Math.abs(firstRatio - secondRatio) > .01) return false;
+  let totalDifference = 0;
+  let maxDifference = 0;
+  for (let index = 0; index < first.rgb.length; index += 1) {
+    const difference = Math.abs(first.rgb[index] - second.rgb[index]);
+    totalDifference += difference;
+    if (difference > maxDifference) maxDifference = difference;
+  }
+  // This deliberately catches only re-encoded copies of the same frame.
+  // Similar game levels must remain separate store screenshots.
+  return totalDifference / first.rgb.length <= 1.2 && maxDifference <= 32;
+}
+
+function isGooglePlayStoreScreenshot(item) {
+  return hostname(item?.sourceUrl || item?.productUrl || "") === "play.google.com"
+    && Boolean(googleImageBaseId(item?.image));
+}
+
+function storeCaptureImageScore(url) {
+  const match = String(url || "").match(/(?:w|width=)(\d{2,5})[^\d]+(?:h|height=)(\d{2,5})|\b(\d{2,5})x(\d{2,5})\b/i);
+  if (!match) return String(url || "").length;
+  const width = Number(match[1] || match[3] || 0);
+  const height = Number(match[2] || match[4] || 0);
+  return width * height || String(url || "").length;
+}
+
+async function storeImageFingerprint(url) {
+  const cacheKey = `generic:${storeImageKey(url) || url}`;
+  const cached = storeFingerprintCache.get(cacheKey);
+  if (cached) return cached;
+  const bitmap = await fetchImageBitmap(url);
   try {
     const canvas = new OffscreenCanvas(8, 8);
     const context = canvas.getContext("2d", { willReadFrequently: true });

@@ -156,12 +156,9 @@
       const previous = bestByKey.get(key);
       if (!previous || storeImageScore(item.image) > storeImageScore(previous.image)) bestByKey.set(key, item);
     }
-    // Google Play sometimes exposes one real screenshot with more than one
-    // storage ID. Keep the complete canonical gallery here; the worker reads
-    // the pixels, removes only near-identical frames, then applies the cap.
-    const unique = [...bestByKey.values()];
     // Keep extra Play candidates only until the worker can compare their
     // pixels. The stored collection is capped there at eight screenshots.
+    const unique = [...bestByKey.values()];
     return location.hostname === "play.google.com"
       ? unique.slice(0, MAX_GOOGLE_PLAY_STORE_IMAGES * 3)
       : unique.slice(0, MAX_IOS_STORE_IMAGES);

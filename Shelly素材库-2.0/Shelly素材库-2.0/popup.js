@@ -82,33 +82,28 @@ async function dedupeStoreImages(items) {
     const key = normalizedStoreImageKey(image);
     if (!item.image || urlSeen.has(key)) continue;
     const screenshotIndex = Number(item.screenshotIndex);
-    const isGoogleScreenshot = isGooglePlayStoreScreenshot(item, image);
+    const isGoogleScreenshot = isGooglePlayStoreCapture(item);
     if (isGoogleScreenshot && Number.isInteger(screenshotIndex) && screenshotIndex >= 0) {
       if (googleScreenshotIndexes.has(screenshotIndex)) continue;
       googleScreenshotIndexes.add(screenshotIndex);
     }
     urlSeen.add(key);
-    if (!isGoogleScreenshot) {
-      try {
-        const hash = await visualHash(image);
-        if (hashes.some(existing => existing.orientation === hash.orientation && hammingDistance(existing.bits, hash.bits) <= 5)) continue;
-        hashes.push(hash);
-      } catch (_) {
-        // URL de-duplication still protects the capture when an image host blocks reads.
-      }
+    try {
+      const hash = await visualHash(image);
+      if (hashes.some(existing => existing.orientation === hash.orientation && hammingDistance(existing.bits, hash.bits) <= 5)) continue;
+      hashes.push(hash);
+    } catch (_) {
+      // URL de-duplication still protects the capture when an image host blocks reads.
     }
     output.push({ ...item, image, ...(Number.isInteger(screenshotIndex) && screenshotIndex >= 0 ? { screenshotIndex, sortOrder: screenshotIndex } : {}) });
   }
-  // The worker performs strict pixel comparison for Google Play and only then
-  // limits a set to eight screenshots, so later unique frames are never lost.
-  return hostname(activeTab?.url || "") === "play.google.com"
+  return isGooglePlayStoreCapture()
     ? output.slice(0, 24)
     : output.slice(0, 10);
 }
 
-function isGooglePlayStoreScreenshot(item, image) {
-  return hostname(item?.sourceUrl || item?.productUrl || activeTab?.url || "") === "play.google.com"
-    && Boolean(googleImageBaseId(image));
+function isGooglePlayStoreCapture(item) {
+  return hostname(item?.sourceUrl || item?.productUrl || activeTab?.url || "") === "play.google.com";
 }
 
 function normalizedStoreImageKey(url) {
