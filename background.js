@@ -641,11 +641,13 @@ function areNearlyIdenticalGoogleScreenshots(first, second) {
   }
   const averageDifference = totalDifference / first.rgb.length;
   const dhashDistance = (first.dhash && second.dhash) ? hammingDistance(first.dhash, second.dhash) : Infinity;
-  // A carousel clone is the SAME screenshot re-encoded from a different storage
-  // id. Two independent signals now flag it: a near-zero average pixel diff, OR
-  // a tiny perceptual-hash distance. Either one on its own only fires for the
-  // same frame; distinct levels differ strongly on both, so they stay separate.
-  const identical = dhashDistance <= 12 || averageDifference <= 4;
+  // A carousel clone is the SAME screenshot Google re-rendered at another
+  // resolution, so its downscaled pixels drift a little more than an exact
+  // re-encode. Real logged data shows two well-separated clusters: clones sit
+  // at dHash 7-32 / avgDiff 1-14, while genuinely different levels never drop
+  // below dHash ~79 / avgDiff ~37. Thresholds live in that wide gap, and both
+  // signals must agree so a single noisy metric cannot merge distinct frames.
+  const identical = dhashDistance <= 40 && averageDifference <= 20;
   console.info(`[Shelly] Play screenshot compare dHash=${dhashDistance} avgDiff=${averageDifference.toFixed(2)} -> ${identical ? "DUPLICATE (drop)" : "keep"}`);
   return identical;
 }
