@@ -316,6 +316,10 @@
     .favorite-button:hover, .store-favorite:hover { background:#eff9dc; color:#5f9220; transform:scale(1.08); }
     .favorite-button.is-favorite, .store-favorite.is-favorite { background:#eff9dc; color:#5f9220; }
     .masonry.icon-grid .favorite-button { top:8px; right:8px; width:28px; height:28px; }
+    .store-favorite { width:22px; height:22px; top:5px; right:5px; font-size:13px; }
+    .store-copy { position:absolute; z-index:3; top:31px; right:5px; width:22px; height:22px; display:grid; place-items:center; border-radius:50%; background:#fffffff0; color:#667569; font-size:12px; line-height:1; box-shadow:0 3px 10px #14211926; opacity:0; transform:translateY(-3px); pointer-events:none; cursor:pointer; transition:opacity .16s ease, transform .16s ease, background .16s ease, color .16s ease; }
+    .store-thumb:hover .store-copy, .store-thumb:focus-within .store-copy { opacity:1; transform:translateY(0); pointer-events:auto; }
+    .store-copy:hover { background:#eff9dc; color:#5f9220; transform:scale(1.08); }
     .store-thumb { position:relative; }
     .check { display:flex; gap:8px; align-items:center; color:#526056; font-size:13px; cursor:pointer; }
     .check input { accent-color:var(--blue); }
