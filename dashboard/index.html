@@ -221,7 +221,8 @@
     .masonry.inspiration-grid .asset-art img { object-fit:cover; }
     .masonry.inspiration-grid .asset-art.has-image { aspect-ratio:auto; height:auto; min-height:0; padding:0; display:block; }
     .masonry.inspiration-grid .asset-art.has-image img { position:static; width:100%; height:auto; display:block; object-fit:contain; }
-    .masonry.inspiration-grid .asset-art.has-image .art-title { position:absolute; left:0; right:0; bottom:0; margin:0; padding:10px; }
+    .masonry.inspiration-grid .asset-art.has-image .art-title { display:none; }
+    .masonry.inspiration-grid .asset-art.has-image:after { display:none; }
     .masonry.inspiration-grid .art-title { max-width:100%; font-size:clamp(13px,1.15vw,18px); }
     .masonry.inspiration-grid .asset.is-demo .asset-art { background-blend-mode:soft-light,normal; }
     .masonry.inspiration-grid .asset.is-demo .asset-art:before { width:68%; height:40%; top:9%; right:-16%; background:#ffffff3b; }
